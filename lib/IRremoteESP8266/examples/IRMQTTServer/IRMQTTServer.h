@@ -5,6 +5,9 @@
 #ifndef EXAMPLES_IRMQTTSERVER_IRMQTTSERVER_H_
 #define EXAMPLES_IRMQTTSERVER_IRMQTTSERVER_H_
 
+#if defined(ESP8266)
+#include <ESP8266WiFi.h>
+#endif  // ESP8266
 #include <IRremoteESP8266.h>
 #include <IRrecv.h>
 #include <IRsend.h>
@@ -65,7 +68,7 @@ const IPAddress kSubnetMask = IPAddress(255, 255, 255, 0);
 #endif  // USE_STATIC_IP
 
 // See: https://github.com/tzapu/WiFiManager#filter-networks for these settings.
-#define HIDE_DUPLIATE_NETWORKS false  // Should WifiManager hide duplicate SSIDs
+#define HIDE_DUPLICATE_NETWORKS false  // Make WifiManager hide duplicate SSIDs
 // #define MIN_SIGNAL_STRENGTH 20  // Minimum WiFi signal stength (percentage)
                                    // before we will connect.
                                    // The unset default is 8%.
@@ -156,6 +159,16 @@ const uint16_t kMinUnknownSize = 2 * 10;
 
 // ------------------------ Advanced Usage Only --------------------------------
 
+// Reports the input voltage to the ESP chip. **NOT** the input voltage
+// to the development board (e.g. NodeMCU, D1 Mini etc) which are typically
+// powered by USB (5V) which is then lowered to 3V via a Low Drop Out (LDO)
+// Voltage regulator. Hence, this feature is turned off by default as it
+// make little sense for most users as it really isn't the actual input voltage.
+// E.g. For purposes of monitoring a battery etc.
+// Note: Turning on the feature costs ~250 bytes of prog space.
+#define REPORT_VCC false  // Do we report Vcc via html info page & MQTT?
+
+// Keywords for MQTT topics, html arguments, or config file.
 #define KEY_PROTOCOL "protocol"
 #define KEY_MODEL "model"
 #define KEY_POWER "power"
@@ -175,6 +188,7 @@ const uint16_t kMinUnknownSize = 2 * 10;
 #define KEY_CELSIUS "use_celsius"
 #define KEY_JSON "json"
 #define KEY_RESEND "resend"
+#define KEY_VCC "vcc"
 
 // HTML arguments we will parse for IR code information.
 #define KEY_TYPE "type"  // KEY_PROTOCOL is also checked too.
@@ -195,6 +209,11 @@ const uint8_t kPortLength = 5;  // Largest value of uint16_t is "65535".
 const uint8_t kUsernameLength = 15;
 const uint8_t kPasswordLength = 20;
 
+// -------------------------- Json Settings ------------------------------------
+
+const uint16_t kJsonConfigMaxSize = 512;    // Bytes
+const uint16_t kJsonAcStateMaxSize = 1024;  // Bytes
+
 // -------------------------- Debug Settings -----------------------------------
 // Debug output is disabled if any of the IR pins are on the TX (D1) pin.
 // See `isSerialGpioUsedByIr()`.
@@ -206,7 +225,7 @@ const uint8_t kPasswordLength = 20;
 // ----------------- End of User Configuration Section -------------------------
 
 // Constants
-#define _MY_VERSION_ "v1.3.4-beta"
+#define _MY_VERSION_ "v1.4.0-alpha"
 
 const uint8_t kRebootTime = 15;  // Seconds
 const uint8_t kQuickDisplayTime = 2;  // Seconds
@@ -297,6 +316,9 @@ void sendJsonState(const stdAc::state_t state, const String topic,
                    const bool retain = false, const bool ha_mode = true);
 #endif  // MQTT_CLIMATE_JSON
 #endif  // MQTT_ENABLE
+#if REPORT_VCC
+String vccToString(void);
+#endif  // REPORT_VCC
 bool isSerialGpioUsedByIr(void);
 void debug(const char *str);
 void saveWifiConfigCallback(void);

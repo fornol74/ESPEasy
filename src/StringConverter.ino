@@ -1,3 +1,8 @@
+#include "src/Globals/CRCValues.h"
+#include "src/Globals/Device.h"
+#include "src/Globals/ESPEasyWiFiEvent.h"
+#include "src/Globals/MQTT.h"
+
 /********************************************************************************************\
    Convert a char string to integer
  \*********************************************************************************************/
@@ -216,7 +221,7 @@ String doFormatUserVar(struct EventStruct *event, byte rel_index, bool mustCheck
 
     if (loglevelActiveFor(LOG_LEVEL_DEBUG)) {
       String log = F("Invalid float value for TaskIndex: ");
-      log += TaskIndex;
+      log += event->TaskIndex;
       log += F(" varnumber: ");
       log += rel_index;
       addLog(LOG_LEVEL_DEBUG, log);
@@ -224,6 +229,7 @@ String doFormatUserVar(struct EventStruct *event, byte rel_index, bool mustCheck
 #endif // ifndef BUILD_NO_DEBUG
     f = 0;
   }
+  LoadTaskSettings(event->TaskIndex);
   return toString(f, ExtraTaskSettings.TaskDeviceValueDecimals[rel_index]);
 }
 
@@ -698,7 +704,9 @@ void parseSystemVariables(String& s, boolean useURLencode)
   SMART_REPL_T(F("%sunrise"), replSunRiseTimeString)
 
   if (s.indexOf(F("%is")) != -1) {
+#ifdef USES_MQTT
     SMART_REPL(F("%ismqtt%"),    String(MQTTclient_connected));
+#endif    
     SMART_REPL(F("%iswifi%"),    String(wifiStatus)); // 0=disconnected, 1=connected, 2=got ip, 3=services initialized
     SMART_REPL(F("%isntp%"),     String(statusNTPInitialized));
     #ifdef USES_P037
@@ -760,8 +768,7 @@ void parseEventVariables(String& s, struct EventStruct *event, boolean useURLenc
       SMART_REPL(F("%val4%"), formatUserVarNoCheck(event, 3))
     }
   }
-
-  // FIXME TD-er: Must make sure LoadTaskSettings has been performed before this is called.
+  LoadTaskSettings(event->TaskIndex);
   repl(F("%tskname%"), ExtraTaskSettings.TaskDeviceName, s, useURLencode);
 
   if (s.indexOf(F("%vname")) != -1) {

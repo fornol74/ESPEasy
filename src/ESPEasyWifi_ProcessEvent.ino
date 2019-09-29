@@ -1,3 +1,5 @@
+#include "src/Globals/ESPEasyWiFiEvent.h"
+
 bool unprocessedWifiEvents() {
   if (processedConnect && processedDisconnect && processedGotIP && processedDHCPTimeout)
   {
@@ -57,6 +59,7 @@ void handle_unprocessedWiFiEvents()
 
     if ((wifiStatus & ESPEASY_WIFI_GOT_IP) && (wifiStatus & ESPEASY_WIFI_CONNECTED) && WiFi.isConnected()) {
       wifiStatus = ESPEASY_WIFI_SERVICES_INITIALIZED;
+      wifiConnectInProgress = false;
       resetAPdisableTimer();
     }
   } else if (!WiFiConnected()) {
@@ -162,6 +165,11 @@ void processConnect() {
     rulesProcessing(event);
   }
 
+  if (Settings.UseRules && channel_changed) {
+    String event = F("WiFi#ChangedWiFichannel");
+    rulesProcessing(event);
+  }
+
   if (useStaticIP()) {
     markGotIP(); // in static IP config the got IP event is never fired.
   }
@@ -251,10 +259,12 @@ void processGotIP() {
   if (systemTimePresent()) {
     initTime();
   }
+#ifdef USES_MQTT
   mqtt_reconnect_count        = 0;
   MQTTclient_should_reconnect = true;
   timermqtt_interval          = 100;
   setIntervalTimer(TIMER_MQTT);
+#endif //USES_MQTT
   sendGratuitousARP_now();
 
   if (Settings.UseRules)

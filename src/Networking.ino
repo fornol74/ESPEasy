@@ -1,3 +1,6 @@
+#include "src/Globals/Nodes.h"
+#include "src/Globals/ESPEasyWiFiEvent.h"
+
 // Generic Networking routines
 
 // Syslog
@@ -14,11 +17,42 @@
   # if !defined(ARDUINO_ESP8266_RELEASE_2_4_0) && !defined(ARDUINO_ESP8266_RELEASE_2_3_0)
     #  define SUPPORT_ARP
   # endif // if !defined(ARDUINO_ESP8266_RELEASE_2_4_0) && !defined(ARDUINO_ESP8266_RELEASE_2_3_0)
-#endif // ifdef ESP8266
+#endif    // ifdef ESP8266
+
+#ifdef ESP32
+# define SUPPORT_ARP
+#endif // ifdef ESP32
 
 #ifdef SUPPORT_ARP
 # include <lwip/etharp.h>
+
+#ifdef ESP32
+# include <lwip/etharp.h>
+# include <lwip/tcpip.h>
+
+void _etharp_gratuitous_func(struct netif *netif) {
+  etharp_gratuitous(netif);
+}
+
+void etharp_gratuitous_r(struct netif *netif) {
+  tcpip_callback_with_block((tcpip_callback_fn)_etharp_gratuitous_func, netif, 0);
+}
+
+#endif // ifdef ESP32
+
 #endif // ifdef SUPPORT_ARP
+
+#ifdef USE_SETTINGS_ARCHIVE
+# ifdef ESP8266
+#  include <ESP8266HTTPClient.h>
+# endif // ifdef ESP8266
+# ifdef ESP32
+#  include "HTTPClient.h"
+# endif // ifdef ESP32
+#endif  // USE_SETTINGS_ARCHIVE
+
+
+#include "src/DataStructs/EventValueSource.h"
 
 /*********************************************************************************************\
    Syslog client
@@ -918,9 +952,181 @@ void sendGratuitousARP() {
   netif *n = netif_list;
 
   while (n) {
-    etharp_gratuitous(n);
+    if ((n->hwaddr_len == ETH_HWADDR_LEN) && 
+        (n->flags & NETIF_FLAG_ETHARP) && 
+        ((n->flags & NETIF_FLAG_LINK_UP) && (n->flags & NETIF_FLAG_UP))) {
+      #ifdef ESP32
+        etharp_gratuitous_r(n);
+      #else
+        etharp_gratuitous(n);
+      #endif
+    }
     n = n->next;
   }
   STOP_TIMER(GRAT_ARP_STATS);
 #endif // ifdef SUPPORT_ARP
 }
+
+bool splitHostPortString(const String& hostPortString, String& host, uint16_t& port) {
+  port = 80; // Some default
+  int index_colon = hostPortString.indexOf(':');
+
+  if (index_colon >= 0) {
+    int port_tmp;
+
+    if (!validIntFromString(hostPortString.substring(index_colon + 1), port_tmp)) {
+      return false;
+    }
+
+    if ((port_tmp < 0) || (port_tmp > 65535)) { return false; }
+    port = port_tmp;
+    host = hostPortString.substring(0, index_colon);
+  } else {
+    // No port nr defined.
+    host = hostPortString;
+  }
+  return true;
+}
+
+// Split a full URL like "http://hostname:port/path/file.htm"
+// Return value is everything after the hostname:port section (including /)
+String splitURL(const String& fullURL, String& host, uint16_t& port, String& file) {
+  int starthost = fullURL.indexOf(F("//"));
+
+  if (starthost == -1) {
+    starthost = 0;
+  } else {
+    starthost += 2;
+  }
+  int endhost = fullURL.indexOf('/', starthost);
+  splitHostPortString(fullURL.substring(starthost, endhost), host, port);
+  int startfile = fullURL.lastIndexOf('/');
+
+  if (startfile >= 0) {
+    file = fullURL.substring(startfile);
+  }
+  return fullURL.substring(endhost);
+}
+
+#ifdef USE_SETTINGS_ARCHIVE
+
+// Download a file from a given URL and save to a local file named "file_save"
+// If the URL ends with a /, the file part will be assumed the same as file_save.
+// If file_save is empty, the file part from the URL will be used as local file name.
+// Return true when successful.
+bool downloadFile(const String& url, String file_save) {
+  String error;
+
+  return downloadFile(url, file_save, "", "", error);
+}
+
+bool downloadFile(const String& url, String file_save, const String& user, const String& pass, String& error) {
+  String   host, file;
+  uint16_t port;
+  String   uri = splitURL(url, host, port, file);
+
+  if (file_save.length() == 0) {
+    file_save = file;
+  } else if ((file.length() == 0) && uri.endsWith("/")) {
+    // file = file_save;
+    uri += file_save;
+  }
+
+  if (loglevelActiveFor(LOG_LEVEL_INFO)) {
+    String log = F("downloadFile: URL: ");
+    log += url;
+    log += F(" decoded: ");
+    log += host;
+    log += ':';
+    log += port;
+    log += uri;
+    addLog(LOG_LEVEL_ERROR, log);
+  }
+
+  if (file_save.length() == 0) {
+    error = F("Empty filename");
+    addLog(LOG_LEVEL_ERROR, error);
+    return false;
+  }
+
+  if (fileExists(file_save)) {
+    error = F("File exists");
+    addLog(LOG_LEVEL_ERROR, error);
+    return false;
+  }
+  unsigned long timeout = millis() + 2000;
+  WiFiClient    client;
+  HTTPClient    http;
+  http.begin(client, host, port, uri);
+  {
+    if ((user.length() > 0) && (pass.length() > 0)) {
+      http.setAuthorization(user.c_str(), pass.c_str());
+    }
+
+    /*
+       String authHeader = get_auth_header(user, pass);
+
+       if (authHeader.length() > 0) {
+       http.setAuthorization(authHeader.c_str());
+       }
+     */
+  }
+  int httpCode = http.GET();
+
+  if (httpCode != HTTP_CODE_OK) {
+    error  = F("HTTP code: ");
+    error += httpCode;
+    addLog(LOG_LEVEL_ERROR, error);
+    return false;
+  }
+
+  long len = http.getSize();
+  File f   = SPIFFS.open(file_save, "w");
+
+  if (f) {
+    uint8_t buff[128];
+    size_t  bytesWritten = 0;
+
+    // get tcp stream
+    WiFiClient *stream = &client;
+
+    // read all data from server
+    while (http.connected() && (len > 0 || len == -1)) {
+      // read up to 128 byte
+      size_t c = stream->readBytes(buff, std::min((size_t)len, sizeof(buff)));
+
+      if (c > 0) {
+        timeout = millis() + 2000;
+        if (f.write(buff, c) != c) {
+          error  = F("Error saving file, ");
+          error += bytesWritten;
+          error += F(" Bytes written");
+          addLog(LOG_LEVEL_ERROR, error);
+          http.end();
+          return false;
+        }
+        bytesWritten += c;
+
+        if (len > 0) { len -= c; }
+      }
+
+      if (timeOutReached(timeout)) {
+        error = F("Timeout");
+        addLog(LOG_LEVEL_ERROR, error);
+        delay(0);
+        http.end();
+        return false;
+      }
+      delay(0);
+    }
+    f.close();
+    http.end();
+    addLog(LOG_LEVEL_INFO, F("downloadFile: Success"));
+    return true;
+  }
+  error = F("Failed to open file for writing");
+  addLog(LOG_LEVEL_ERROR, error);
+  return false;
+}
+
+#endif  // USE_SETTINGS_ARCHIVE
